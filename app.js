@@ -32,16 +32,17 @@ const app = express();
 
 
 // // CORS setup for dev/testing
-// app.use(cors({ origin: true, credentials: true }));
-// app.options('*', cors({ origin: true, credentials: true }));
+app.use(cors({ origin: '*', credentials: false }));
 
-// app.use(express.json());
-// app.use(express.urlencoded({ extended: true }));
 
-// // Static file serving (uploaded images)
-// app.use('/public', express.static(path.join(__dirname, 'public')));
 
-// // Main API routes
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Static file serving (uploaded images)
+app.use('/public', express.static(path.join(__dirname, 'public')));
+
+// Main API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/jobs', jobRoutes);
