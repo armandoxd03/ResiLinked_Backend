@@ -1,19 +1,27 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
-const idUpload = require('../middleware/upload');
+const upload = require('../middleware/upload');
 const { registerValidation } = require('../middleware/validate');
 
-// Registration (with ID image upload & validation)
-router.post('/register', idUpload.fields([
-  { name: 'idFrontImage' }, 
-  { name: 'idBackImage' }
-]), registerValidation, authController.register);
+// Registration with ID upload
+router.post('/register', 
+    upload.fields([
+        { name: 'idFrontImage', maxCount: 1 },
+        { name: 'idBackImage', maxCount: 1 }
+    ]),
+    registerValidation,
+    authController.register
+);
+
 // Login
 router.post('/login', authController.login);
-// Password reset request (send email)
+
+// Password reset
 router.post('/reset/request', authController.resetRequest);
-// Password reset (using token)
 router.post('/reset', authController.resetPassword);
+
+// Email verification
+router.post('/verify/resend', authController.resendVerification);
 
 module.exports = router;

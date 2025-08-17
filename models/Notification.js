@@ -4,7 +4,15 @@ const notificationSchema = new mongoose.Schema({
     recipient: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     type: { 
         type: String, 
-        enum: ['job_accepted', 'job_completed', 'rating_received', 'verification_complete', 'job_applied', 'admin_message'],
+        enum: [
+            'job_accepted',
+            'job_completed',
+            'rating_received',
+            'verification_complete',
+            'job_applied',
+            'admin_message',
+            'verification_needed'
+        ],
         required: true
     },
     message: { type: String, required: true },

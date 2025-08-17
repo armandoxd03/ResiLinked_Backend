@@ -1,96 +1,279 @@
 const Job = require('../models/Job');
 const User = require('../models/User');
 const { findMatchingJobs } = require('../utils/matchingEngine');
+const { createNotification } = require('../utils/notificationHelper');
+const { sendSMS } = require('../utils/smsService');
 
-// Post job
 exports.postJob = async (req, res) => {
     try {
-        const job = new Job({ ...req.body, postedBy: req.user.id });
+        if (!req.body.title || !req.body.price || !req.body.barangay) {
+            return res.status(400).json({
+                message: "Missing required fields",
+                required: ["title", "price", "barangay"],
+                alert: "Please fill all required fields"
+            });
+        }
+
+        const job = new Job({ 
+            ...req.body, 
+            postedBy: req.user.id,
+            status: 'open'
+        });
+
         await job.save();
-        res.status(201).json(job);
+
+        const matchingUsers = await User.find({
+            barangay: job.barangay,
+            skills: { $in: job.skillsRequired },
+            userType: { $in: ['employee', 'both'] }
+        });
+
+        matchingUsers.forEach(async user => {
+            await createNotification({
+                recipient: user._id,
+                type: 'job_match',
+                message: `New job in your area matching your skills: ${job.title}`,
+                relatedJob: job._id
+            });
+
+            if (user.notificationPreferences?.sms) {
+                await sendSMS(
+                    user._id,
+                    `New job in ${job.barangay}: ${job.title}. Pay: ₱${job.price}`
+                );
+            }
+        });
+
+        res.status(201).json({
+            message: "Job posted successfully",
+            job,
+            matchesFound: matchingUsers.length,
+            alert: "Job posted! Potential candidates will be notified"
+        });
     } catch (err) {
-        res.status(500).json({ message: "Error posting job", error: err.message });
+        res.status(500).json({ 
+            message: "Error posting job", 
+            error: err.message,
+            alert: "Failed to post job. Please try again."
+        });
     }
 };
 
-// Get all jobs
 exports.getAll = async (req, res) => {
     try {
-        const jobs = await Job.find({ isOpen: true });
-        res.status(200).json(jobs);
+        const jobs = await Job.find({ isOpen: true })
+            .populate('postedBy', 'firstName lastName profilePicture')
+            .sort({ datePosted: -1 });
+
+        res.status(200).json({
+            jobs,
+            alert: `Found ${jobs.length} open jobs`
+        });
     } catch (err) {
-        res.status(500).json({ message: "Error fetching jobs", error: err.message });
+        res.status(500).json({ 
+            message: "Error fetching jobs", 
+            error: err.message,
+            alert: "Failed to load jobs"
+        });
     }
 };
 
-// Get jobs matching user (AI)
 exports.getMyMatches = async (req, res) => {
     try {
         const user = await User.findById(req.user.id);
         const jobs = await findMatchingJobs(user);
-        res.status(200).json(jobs);
+
+        res.status(200).json({
+            jobs,
+            alert: `Found ${jobs.length} jobs matching your profile`
+        });
     } catch (err) {
-        res.status(500).json({ message: "Error fetching matches", error: err.message });
+        res.status(500).json({ 
+            message: "Error fetching matches", 
+            error: err.message,
+            alert: "Failed to find matching jobs"
+        });
     }
 };
 
-// Apply for job
 exports.applyJob = async (req, res) => {
     try {
-        const job = await Job.findById(req.params.id);
-        if (!job) return res.status(404).json({ message: "Job not found" });
-        // Already applied?
-        if (job.applicants.find(a => a.user.toString() === req.user.id)) {
-            return res.status(400).json({ message: "Already applied" });
+        const job = await Job.findById(req.params.id).populate('postedBy');
+        if (!job) {
+            return res.status(404).json({ 
+                message: "Job not found",
+                alert: "This job is no longer available"
+            });
         }
-        job.applicants.push({ user: req.user.id });
+
+        if (!job.isOpen) {
+            return res.status(400).json({ 
+                message: "Job is closed",
+                alert: "This job is no longer accepting applications"
+            });
+        }
+
+        const alreadyApplied = job.applicants.some(a => a.user.toString() === req.user.id);
+        if (alreadyApplied) {
+            return res.status(400).json({ 
+                message: "Already applied",
+                alert: "You've already applied to this job"
+            });
+        }
+
+        job.applicants.push({ 
+            user: req.user.id,
+            appliedAt: new Date()
+        });
         await job.save();
-        res.status(200).json({ message: "Applied" });
+
+        const applicant = await User.findById(req.user.id);
+        await createNotification({
+            recipient: job.postedBy._id,
+            type: 'job_applied',
+            message: `${applicant.firstName} ${applicant.lastName} applied to your job "${job.title}"`,
+            relatedJob: job._id
+        });
+
+        await createNotification({
+            recipient: req.user.id,
+            type: 'application_sent',
+            message: `You applied to "${job.title}"`,
+            relatedJob: job._id
+        });
+
+        res.status(200).json({ 
+            message: "Application submitted",
+            jobId: job._id,
+            jobTitle: job.title,
+            employer: job.postedBy.firstName + ' ' + job.postedBy.lastName,
+            alert: "Application sent successfully!"
+        });
     } catch (err) {
-        res.status(500).json({ message: "Error applying", error: err.message });
+        res.status(500).json({ 
+            message: "Error applying", 
+            error: err.message,
+            alert: "Failed to apply. Please try again."
+        });
     }
 };
 
-// Assign worker to job (by employer)
 exports.assignWorker = async (req, res) => {
     try {
-        const job = await Job.findById(req.params.id);
-        if (!job) return res.status(404).json({ message: "Job not found" });
-        if (job.postedBy.toString() !== req.user.id) {
-            return res.status(403).json({ message: "Not your job" });
+        const job = await Job.findById(req.params.id).populate('postedBy');
+        if (!job) {
+            return res.status(404).json({ 
+                message: "Job not found",
+                alert: "This job is no longer available"
+            });
         }
+
+        if (job.postedBy.toString() !== req.user.id) {
+            return res.status(403).json({ 
+                message: "Not authorized",
+                alert: "You can only assign workers to your own jobs"
+            });
+        }
+
+        const isApplicant = job.applicants.some(a => a.user.toString() === req.body.userId);
+        if (!isApplicant) {
+            return res.status(400).json({ 
+                message: "User didn't apply",
+                alert: "You can only assign workers who applied to this job"
+            });
+        }
+
         job.assignedTo = req.body.userId;
         job.isOpen = false;
-        // Mark applicant as accepted
-        job.applicants = job.applicants.map(a =>
-            a.user.toString() === req.body.userId
-                ? { ...a.toObject(), status: 'accepted' }
-                : { ...a.toObject(), status: 'rejected' }
-        );
+        job.status = 'assigned';
+        job.applicants = job.applicants.map(a => ({
+            ...a.toObject(),
+            status: a.user.toString() === req.body.userId ? 'accepted' : 'rejected'
+        }));
+        
         await job.save();
-        res.status(200).json({ message: "Worker assigned" });
+
+        const worker = await User.findById(req.body.userId);
+        await createNotification({
+            recipient: req.body.userId,
+            type: 'job_accepted',
+            message: `You've been assigned to "${job.title}"`,
+            relatedJob: job._id
+        });
+
+        if (worker.notificationPreferences?.sms) {
+            await sendSMS(
+                req.body.userId,
+                `You got the job: ${job.title}. Contact ${job.postedBy.firstName} at ${job.postedBy.mobileNo}`
+            );
+        }
+
+        res.status(200).json({ 
+            message: "Worker assigned successfully",
+            job: {
+                id: job._id,
+                title: job.title,
+                assignedTo: worker.firstName + ' ' + worker.lastName
+            },
+            alert: "Worker assigned and notified"
+        });
     } catch (err) {
-        res.status(500).json({ message: "Error assigning worker", error: err.message });
+        res.status(500).json({ 
+            message: "Error assigning worker", 
+            error: err.message,
+            alert: "Failed to assign worker"
+        });
     }
 };
 
-// Filter/search jobs
 exports.search = async (req, res) => {
     try {
-        const { skill, barangay, sortBy='date', order='desc' } = req.query;
+        const { skill, barangay, minPrice, maxPrice, sortBy = 'datePosted', order = 'desc', page = 1, limit = 10 } = req.query;
+        
         let query = { isOpen: true };
-        if (skill) query.skillsRequired = skill;
+        
+        if (skill) query.skillsRequired = { $in: skill.split(',') };
         if (barangay) query.barangay = barangay;
-        let jobs = await Job.find(query);
-        // Sorting
-        if (sortBy === 'price') {
-            jobs.sort((a, b) => order === 'asc' ? a.price - b.price : b.price - a.price);
+        if (minPrice || maxPrice) {
+            query.price = {};
+            if (minPrice) query.price.$gte = Number(minPrice);
+            if (maxPrice) query.price.$lte = Number(maxPrice);
         }
-        if (sortBy === 'date') {
-            jobs.sort((a, b) => order === 'asc' ? a.datePosted - b.datePosted : b.datePosted - a.datePosted);
-        }
-        res.status(200).json(jobs);
+
+        const sortOptions = {};
+        sortOptions[sortBy] = order === 'asc' ? 1 : -1;
+
+        const [jobs, total] = await Promise.all([
+            Job.find(query)
+                .sort(sortOptions)
+                .skip((page - 1) * limit)
+                .limit(limit)
+                .populate('postedBy', 'firstName lastName'),
+            Job.countDocuments(query)
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: jobs,
+            filters: {
+                skill,
+                barangay,
+                priceRange: { minPrice, maxPrice }
+            },
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total,
+                pages: Math.ceil(total / limit)
+            },
+            sortedBy: `${sortBy} (${order})`,
+            alert: jobs.length ? `Found ${total} jobs` : "No jobs found matching your criteria"
+        });
     } catch (err) {
-        res.status(500).json({ message: "Error searching jobs", error: err.message });
+        res.status(500).json({ 
+            message: "Error searching jobs", 
+            error: err.message,
+            alert: "Job search failed"
+        });
     }
 };

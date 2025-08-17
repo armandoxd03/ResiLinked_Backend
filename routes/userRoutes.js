@@ -1,13 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
+const upload = require('../middleware/upload');
 const auth = require('../middleware/auth');
 
-// Get current user's profile
+// User Profile
 router.get('/me', auth.verify, userController.getProfile);
-// Edit own profile
-router.put('/me', auth.verify, userController.editProfile);
-// Set a goal (legacy, for backward-compat)
+router.put('/me', 
+    auth.verify, 
+    upload.single('profilePicture'), 
+    userController.editProfile
+);
+
+// Goals (Legacy)
 router.post('/goals', auth.verify, userController.setGoal);
 
 module.exports = router;

@@ -3,7 +3,7 @@ const router = express.Router();
 const passwordResetTokenController = require('../controllers/passwordResetTokenController');
 const auth = require('../middleware/auth');
 
-// For admin (optional)
+// Token Management (Admin)
 router.get('/', auth.verify, auth.verifyAdmin, passwordResetTokenController.getAllTokens);
 router.delete('/:id', auth.verify, auth.verifyAdmin, passwordResetTokenController.deleteToken);
 router.patch('/:id/used', auth.verify, auth.verifyAdmin, passwordResetTokenController.markAsUsed);
